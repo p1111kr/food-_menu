@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:meals/config/api_config.dart';
+import 'package:meals/screens/admin_dashboard.dart';
 import 'package:meals/screens/tabs.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -67,6 +68,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         if (extractedId != null && extractedId.isNotEmpty) {
           await prefs.setString('userId', extractedId);
           await prefs.setBool('isLoggedIn', true);
+          await prefs.setBool('isAdmin', responseData['isAdmin'] == true);
+          await prefs.setString(
+            'role',
+            responseData['role']?.toString() ?? 'user',
+          );
 
           final doubleCheck = prefs.getString('userId');
           print('VERIFICATION: SharedPreferences now contains: $doubleCheck');
@@ -84,8 +90,12 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         }
 
         if (!mounted) return;
+        final isAdmin = responseData['isAdmin'] == true;
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (ctx) => const TabScreen()),
+          MaterialPageRoute(
+            builder: (ctx) =>
+                isAdmin ? const AdminDashboardScreen() : const TabScreen(),
+          ),
         );
       } else {
         final errorData = json.decode(response.body);
