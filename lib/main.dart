@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:meals/screens/tabs.dart';
 import 'package:meals/screens/auth.dart';
+import 'package:meals/screens/admin_dashboard.dart';
 
 // THEME CONFIGURATION
 final theme = ThemeData(
@@ -22,11 +23,14 @@ void main() async {
 
   final prefs = await SharedPreferences.getInstance();
   final isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
+  final isAdmin = prefs.getBool('isAdmin') ?? false;
 
   runApp(
     ProviderScope(
       child: App(
-        startScreen: isLoggedIn ? const TabScreen() : const AuthScreen(),
+        startScreen: isLoggedIn
+            ? (isAdmin ? const AdminDashboardScreen() : const TabScreen())
+            : const AuthScreen(),
       ),
     ),
   );
