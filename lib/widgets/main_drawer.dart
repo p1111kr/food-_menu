@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:meals/screens/auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:meals/providers/categories_provider.dart';
 import 'package:meals/providers/meals_provider.dart';
 
 class MainDrawer extends ConsumerWidget {
@@ -66,6 +67,7 @@ class MainDrawer extends ConsumerWidget {
                   await prefs.clear(); // this Clears UserID from phone memory
 
                   // This wipes the old user's meals from the app's cache
+                  ref.invalidate(categoriesProvider);
                   ref.invalidate(allMealsProvider);
                   ref.invalidate(mealsProvider);
 
