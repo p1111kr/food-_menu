@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/api_config.dart';
 import '../models/meal.dart';
 import '../providers/favorites.dart';
 import '../providers/meals_provider.dart';
+import '../widgets/meal_image_provider.dart';
 
 class MealDetailScreen extends ConsumerWidget {
   const MealDetailScreen({
@@ -56,8 +58,14 @@ class MealDetailScreen extends ConsumerWidget {
 
                 if (confirm == true) {
                   try {
+                    final prefs = await SharedPreferences.getInstance();
+                    final userId = prefs.getString('userId') ?? '';
                     final response = await http.delete(
                       Uri.parse('${ApiConfig.baseUrl}/meals/${meal.id}'),
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'user-id': userId,
+                      },
                     );
 
                     if (!context.mounted) return;
@@ -135,11 +143,24 @@ class MealDetailScreen extends ConsumerWidget {
           children: [
             Hero(
               tag: meal.id,
-              child: Image.network(
-                meal.imageUrl,
+              child: Image(
+                image: mealImageProvider(meal.imageUrl),
                 height: 300,
                 width: double.infinity,
                 fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) {
+                  return Container(
+                    height: 300,
+                    width: double.infinity,
+                    color: Colors.black26,
+                    alignment: Alignment.center,
+                    child: const Icon(
+                      Icons.broken_image_outlined,
+                      color: Colors.white70,
+                      size: 48,
+                    ),
+                  );
+                },
               ),
             ),
             const SizedBox(height: 14),
