@@ -66,7 +66,7 @@ class MainDrawer extends ConsumerWidget {
                   final prefs = await SharedPreferences.getInstance();
                   await prefs.clear(); // this Clears UserID from phone memory
 
-                  // This wipes the old user's meals from the app's cache
+                  // This wipes the old users meals from the apps cache
                   ref.invalidate(categoriesProvider);
                   ref.invalidate(allMealsProvider);
                   ref.invalidate(mealsProvider);
