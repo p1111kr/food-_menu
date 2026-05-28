@@ -1,9 +1,12 @@
-import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
-import '../config/api_config.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/meal.dart';
+
+// Provider for the Supabase client to enable testability
+final supabaseClientProvider = Provider<SupabaseClient>((ref) {
+  return Supabase.instance.client;
+});
 
 class FavoriteMealsNotifier extends Notifier<List<Meal>> {
   @override
@@ -11,59 +14,77 @@ class FavoriteMealsNotifier extends Notifier<List<Meal>> {
     return [];
   }
 
+  SupabaseClient get _supabase => Supabase.instance.client;
+
   Future<void> fetchAndSetFavorites() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final userId = prefs.getString('userId');
+      final user = _supabase.auth.currentUser;
+      if (user == null) return;
 
-      if (userId == null) return;
+      // Get favorite meal ID from the users profile in Supabase
+      final profile = await _supabase
+          .from('profiles')
+          .select('favorites')
+          .eq('id', user.id)
+          .maybeSingle();
 
-      final url = Uri.parse('${ApiConfig.baseUrl}/user-favorites/$userId');
-      final response = await http.get(url);
+      final favoriteIds = (profile?['favorites'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          <String>[];
 
-      if (response.statusCode == 200) {
-        final List<dynamic> listData = json.decode(response.body);
-
-        // Convert the raw JSON list from MongoDB back into a List of Meal objects
-        final List<Meal> loadedFavorites = listData.map((item) {
-          return Meal.fromJson(item);
-        }).toList();
-
-        state = loadedFavorites;
+      if (favoriteIds.isEmpty) {
+        state = [];
+        return;
       }
+
+      // Fetch all meals whose IDs are in the favorites list
+      final response =
+          await _supabase.from('meals').select().inFilter('id', favoriteIds);
+
+      final loadedFavorites = (response as List)
+          .map((item) => Meal.fromJson(item as Map<String, dynamic>))
+          .toList();
+
+      debugPrint(
+          '[FavoritesNotifier] loaded ${loadedFavorites.length} favorites');
+      state = loadedFavorites;
     } catch (error) {
-      print('Error fetching favorites: $error');
+      debugPrint('[FavoritesNotifier] Error fetching favorites: $error');
     }
   }
 
   Future<bool> toggleMealFavoriteStatus(Meal meal) async {
     final mealIsFavorite = state.any((m) => m.id == meal.id);
 
-    // 1. this Update UI state locally for speed
+    // 1. Update UI state locally for speed
     if (mealIsFavorite) {
       state = state.where((m) => m.id != meal.id).toList();
     } else {
       state = [...state, meal];
     }
 
-    // 2. this Sync with MongoDB in the background
+    // 2. Sync with Supabase
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final userId = prefs.getString('userId');
+      final user = _supabase.auth.currentUser;
+      if (user == null) return !mealIsFavorite;
 
-      if (userId != null) {
-        final url = Uri.parse('${ApiConfig.baseUrl}/update-favorites');
-        await http.post(
-          url,
-          headers: {'Content-Type': 'application/json'},
-          body: json.encode({
-            'userId': userId,
-            'favorites': state.map((m) => m.id).toList(),
-          }),
-        );
-      }
+      await _supabase.from('profiles').upsert({
+        'id': user.id,
+        'favorites': state.map((m) => m.id).toList(),
+      });
+
+      debugPrint(
+          '[FavoritesNotifier] synced ${state.length} favorites to Supabase');
     } catch (error) {
-      print("Failed to sync favorites: $error");
+      debugPrint('[FavoritesNotifier] Failed to sync favorites: $error');
+      // Revert local state on sync failure to keep UI consistent
+      if (mealIsFavorite) {
+        state = [...state, meal];
+      } else {
+        state = state.where((m) => m.id != meal.id).toList();
+      }
+      return mealIsFavorite;
     }
 
     return !mealIsFavorite;
