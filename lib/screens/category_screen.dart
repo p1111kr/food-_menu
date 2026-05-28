@@ -37,13 +37,14 @@ class _CategoriesScreenState extends ConsumerState<CategoriesScreen>
   }
 
   void _selectedCategory(BuildContext context, Category category) {
+    debugPrint(
+        '[CategoriesScreen._selectedCategory] selected category UUID="${category.id}" title="${category.title}"');
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (ctx) => MealScreen(
           title: category.title,
           categoryId: category.id,
-          userMealsOnly: category.id == 'c11',
         ),
       ),
     );
@@ -54,9 +55,34 @@ class _CategoriesScreenState extends ConsumerState<CategoriesScreen>
     final categoriesAsync = ref.watch(categoriesProvider);
 
     return categoriesAsync.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (error, stackTrace) => _buildGrid(fallbackCategories),
-      data: _buildGrid,
+      loading: () {
+        debugPrint('[CategoriesScreen] categories loading');
+        return const Center(child: CircularProgressIndicator());
+      },
+      error: (error, stackTrace) {
+        debugPrint('[CategoriesScreen] categories error: $error');
+        return Center(
+          child: Text(
+            'Failed to load categories: $error',
+            style: const TextStyle(color: Colors.white70),
+          ),
+        );
+      },
+      data: (categories) {
+        debugPrint(
+          '[CategoriesScreen] categories data count=${categories.length}',
+        );
+        if (categories.isEmpty) {
+          return const Center(
+            child: Text(
+              'No categories found. Please add categories in the Admin Dashboard.',
+              style: TextStyle(color: Colors.white70),
+              textAlign: TextAlign.center,
+            ),
+          );
+        }
+        return _buildGrid(categories);
+      },
     );
   }
 
