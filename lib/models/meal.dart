@@ -25,6 +25,8 @@ class Meal {
     required this.isLactoseFree,
     required this.isVegan,
     required this.isVegetarian,
+    this.scope,
+    this.userId,
   });
 
   final String id;
@@ -40,28 +42,42 @@ class Meal {
   final bool isLactoseFree;
   final bool isVegan;
   final bool isVegetarian;
+  final String? scope;
+  final String? userId;
 
-  // This is the essential "Translator" method
+  bool get isPersonal => scope == 'personal';
+  bool get isPublic => scope == 'public';
+
+  // This is the essential Translator method
   factory Meal.fromJson(Map<String, dynamic> json) {
     return Meal(
-      id: json['id'],
-      categories: List<String>.from(json['categories']),
-      title: json['title'],
-      imageUrl: json['imageUrl'],
-      ingredients: List<String>.from(json['ingredients']),
-      steps: List<String>.from(json['steps']),
-      duration: json['duration'],
-      // Maps the String from MongoDB (e.g., "simple") to the Enum Complexity.simple
+      id: json['id'].toString(),
+      categories: List<String>.from(
+        json['categories'] ?? [],
+      ),
+      title: json['title'] ?? '',
+      imageUrl: json['imageUrl'] ?? json['image_url'] ?? '',
+      ingredients: List<String>.from(
+        json['ingredients'] ?? [],
+      ),
+      steps: List<String>.from(
+        json['steps'] ?? [],
+      ),
+      duration: json['duration'] ?? 0,
       complexity: Complexity.values.firstWhere(
         (e) => e.name == json['complexity'],
+        orElse: () => Complexity.simple,
       ),
       affordability: Affordability.values.firstWhere(
         (e) => e.name == json['affordability'],
+        orElse: () => Affordability.affordable,
       ),
-      isGlutenFree: json['isGlutenFree'] ?? false,
-      isLactoseFree: json['isLactoseFree'] ?? false,
-      isVegan: json['isVegan'] ?? false,
-      isVegetarian: json['isVegetarian'] ?? false,
+      isGlutenFree: json['isGlutenFree'] ?? json['is_gluten_free'] ?? false,
+      isLactoseFree: json['isLactoseFree'] ?? json['is_lactose_free'] ?? false,
+      isVegan: json['isVegan'] ?? json['is_vegan'] ?? false,
+      isVegetarian: json['isVegetarian'] ?? json['is_vegetarian'] ?? false,
+      scope: json['scope'] as String?,
+      userId: json['user_id'] as String?,
     );
   }
 }
