@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../config/api_config.dart';
 import '../models/meal.dart';
 import '../providers/favorites.dart';
 import '../providers/meals_provider.dart';
+import '../repositories/supabase_meals_repository.dart';
 import '../widgets/meal_image_provider.dart';
 
 class MealDetailScreen extends ConsumerWidget {
@@ -20,14 +19,14 @@ class MealDetailScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final favoriteMeals = ref.watch(favoriteMealsProvider);
-    final bool isFavorite = favoriteMeals.contains(meal);
+    final bool isFavorite = favoriteMeals.any((m) => m.id == meal.id);
 
     return Scaffold(
       appBar: AppBar(
         title: Text(meal.title),
         actions: [
-          // --- START: DELETE FEATURE FOR USER MEALS ONLY ---
-          if (meal.categories.contains('c11'))
+          // DELETE FEATURE shown for personal meals based on scope not categories
+          if (meal.isPersonal)
             IconButton(
               icon: const Icon(Icons.delete, color: Colors.redAccent),
               onPressed: () async {
@@ -57,84 +56,84 @@ class MealDetailScreen extends ConsumerWidget {
                 );
 
                 if (confirm == true) {
+                  final repository = SupabaseMealsRepository();
+                  final userId = Supabase.instance.client.auth.currentUser?.id;
+
                   try {
-                    final prefs = await SharedPreferences.getInstance();
-                    final userId = prefs.getString('userId') ?? '';
-                    final response = await http.delete(
-                      Uri.parse('${ApiConfig.baseUrl}/meals/${meal.id}'),
-                      headers: {
-                        'Content-Type': 'application/json',
-                        'user-id': userId,
-                      },
-                    );
+                    debugPrint('[MealDetailScreen] delete personal meal start');
+                    debugPrint('[MealDetailScreen] mealId: ${meal.id}');
+                    debugPrint('[MealDetailScreen] userId: $userId');
+
+                    await repository.deleteMeal(meal.id, 'personal');
+
+                    debugPrint('[MealDetailScreen] delete success');
 
                     if (!context.mounted) return;
 
-                    if (response.statusCode == 200) {
-                      try {
-                        ref.invalidate(allMealsProvider);
-                        ref.invalidate(mealsProvider);
-                        await ref.read(allMealsProvider.future);
-                        await ref.read(mealsProvider.future);
-                      } catch (_) {
-                        ref.invalidate(allMealsProvider);
-                        ref.invalidate(mealsProvider);
-                      }
-
-                      if (!context.mounted) return;
-
-                      Navigator.of(context).pop(); // Go back
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Meal deleted.')),
-                      );
-                    } else {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Could not delete meal.')),
-                      );
+                    try {
+                      debugPrint(
+                          '[MealDetailScreen] invalidating mealsProvider');
+                      ref.invalidate(mealsProvider);
+                      await ref.read(mealsProvider.future);
+                      debugPrint(
+                          '[MealDetailScreen] mealsProvider refresh success');
+                    } catch (error) {
+                      debugPrint(
+                          '[MealDetailScreen] mealsProvider refresh failed: $error');
+                      ref.invalidate(mealsProvider);
                     }
-                  } catch (e) {
+
+                    if (!context.mounted) return;
+
+                    Navigator.of(context).pop(); // Go back
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Meal deleted.')),
+                    );
+                  } catch (error) {
+                    debugPrint('[MealDetailScreen] delete failed: $error');
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Could not delete meal.')),
+                        SnackBar(
+                            content: Text('Could not delete meal: $error')),
                       );
                     }
                   }
                 }
               },
             ),
-          // END: DELETE FEATURE
 
-          IconButton(
-            color: Colors.white,
-            onPressed: () async {
-              final wasAdded = await ref
-                  .read(favoriteMealsProvider.notifier)
-                  .toggleMealFavoriteStatus(meal);
+          if (!meal.isPersonal)
+            IconButton(
+              color: Colors.white,
+              onPressed: () async {
+                final wasAdded = await ref
+                    .read(favoriteMealsProvider.notifier)
+                    .toggleMealFavoriteStatus(meal);
 
-              if (!context.mounted) return;
+                if (!context.mounted) return;
 
-              ScaffoldMessenger.of(context).clearSnackBars();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    wasAdded ? 'Meal added as favorite' : 'Meal removed',
+                ScaffoldMessenger.of(context).clearSnackBars();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      wasAdded ? 'Meal added as favorite' : 'Meal removed',
+                    ),
                   ),
+                );
+              },
+              icon: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                transitionBuilder: (child, animation) => RotationTransition(
+                  turns: Tween(begin: 0.8, end: 1.0).animate(animation),
+                  child: child,
                 ),
-              );
-            },
-            icon: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 300),
-              transitionBuilder: (child, animation) => RotationTransition(
-                turns: Tween(begin: 0.8, end: 1.0).animate(animation),
-                child: child,
-              ),
-              child: Icon(
-                isFavorite ? Icons.star : Icons.star_border,
-                key: ValueKey(isFavorite),
-                color: isFavorite ? Colors.amber : Colors.white,
+                child: Icon(
+                  isFavorite ? Icons.star : Icons.star_border,
+                  key: ValueKey(isFavorite),
+                  color: isFavorite ? Colors.amber : Colors.white,
+                ),
               ),
             ),
-          ),
         ],
       ),
       body: SingleChildScrollView(
