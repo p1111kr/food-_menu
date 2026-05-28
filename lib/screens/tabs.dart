@@ -6,6 +6,7 @@ import 'package:meals/widgets/main_drawer.dart';
 import 'package:meals/screens/filters.dart';
 import 'package:meals/providers/filters_provider.dart';
 import 'package:meals/providers/favorites.dart';
+import 'package:meals/providers/meals_provider.dart';
 import 'package:meals/screens/new_meal.dart';
 
 class TabScreen extends ConsumerStatefulWidget {
@@ -54,6 +55,10 @@ class _TabScreenState extends ConsumerState<TabScreen> {
       );
       activePageTitle = 'Your Favorites';
     } else if (_selectedPageIndex == 2) {
+      // "Your Meals" tab — shows personal meals owned by the authenticated user
+      activePage = const _PersonalMealsWrapper();
+      activePageTitle = 'Your Meals';
+    } else if (_selectedPageIndex == 3) {
       activePage = const NewMealScreen();
       activePageTitle = 'Add New Recipe';
     }
@@ -80,11 +85,42 @@ class _TabScreenState extends ConsumerState<TabScreen> {
             label: 'Favorites',
           ),
           BottomNavigationBarItem(
+            icon: Icon(Icons.person),
+            label: 'Your Meals',
+          ),
+          BottomNavigationBarItem(
             icon: Icon(Icons.add_box),
             label: 'Add Meal',
           ),
         ],
       ),
+    );
+  }
+}
+
+// Wraps the personal meals list with a Consumer for Riverpod access
+class _PersonalMealsWrapper extends ConsumerWidget {
+  const _PersonalMealsWrapper();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final personalMealsAsync = ref.watch(mealsProvider);
+
+    return personalMealsAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (error, stackTrace) => Center(
+        child: Text(
+          'Could not load your meals: $error',
+          style: TextStyle(color: Theme.of(context).colorScheme.error),
+        ),
+      ),
+      data: (personalMeals) {
+        debugPrint(
+            '[PersonalMealsWrapper] loaded ${personalMeals.length} personal meals');
+        return MealScreen(
+          meals: personalMeals,
+        );
+      },
     );
   }
 }
