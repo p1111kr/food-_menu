@@ -22,8 +22,7 @@ class AdminDashboardScreen extends ConsumerStatefulWidget {
       _AdminDashboardScreenState();
 }
 
-class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen>
-    with SingleTickerProviderStateMixin {
+class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
   static const _panelColor = Color(0xFF1F1408);
   static const _fieldFillColor = Color(0xFF2A1A10);
   static const _labelColor = Color(0xFFFFB74D);
@@ -40,7 +39,8 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen>
   final _supabaseStorageService = SupabaseStorageService();
   final _supabaseMealsRepository = SupabaseMealsRepository();
   final _supabaseCategoriesRepository = SupabaseCategoriesRepository();
-  late TabController _tabController;
+
+  int _selectedTab = 0;
 
   List<Meal> _publicMeals = [];
   bool _isLoadingMeals = true;
@@ -62,7 +62,6 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
     _loadAdminMeals();
   }
 
@@ -261,7 +260,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen>
       _isVegetarian = meal.isVegetarian;
     });
 
-    _tabController.animateTo(1);
+    setState(() => _selectedTab = 1);
   }
 
   Future<void> _deleteMeal(Meal meal) async {
@@ -441,7 +440,6 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen>
     _categoryTitleController.dispose();
     _gradientStartController.dispose();
     _gradientEndController.dispose();
-    _tabController.dispose();
     super.dispose();
   }
 
@@ -465,17 +463,9 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen>
             icon: const Icon(Icons.logout),
           ),
         ],
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: const [
-            Tab(icon: Icon(Icons.restaurant_menu), text: 'Meals'),
-            Tab(icon: Icon(Icons.edit), text: 'Meal Form'),
-            Tab(icon: Icon(Icons.category), text: 'Categories'),
-          ],
-        ),
       ),
-      body: TabBarView(
-        controller: _tabController,
+      body: IndexedStack(
+        index: _selectedTab,
         children: [
           _buildMealsList(),
           categoriesAsync.when(
@@ -493,6 +483,27 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen>
               return _buildCategories([]);
             },
             data: _buildCategories,
+          ),
+        ],
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        backgroundColor: const Color(0xFF1F1408),
+        selectedItemColor: const Color(0xFFFFB74D),
+        unselectedItemColor: Colors.white54,
+        currentIndex: _selectedTab,
+        onTap: (index) => setState(() => _selectedTab = index),
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.restaurant_menu),
+            label: 'Meals',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.edit),
+            label: 'Meal Form',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.category),
+            label: 'Categories',
           ),
         ],
       ),
