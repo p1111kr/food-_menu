@@ -57,6 +57,13 @@ class FavoriteMealsNotifier extends Notifier<List<Meal>> {
   Future<bool> toggleMealFavoriteStatus(Meal meal) async {
     final mealIsFavorite = state.any((m) => m.id == meal.id);
 
+    debugPrint('=== FAVORITES TOGGLE START ===');
+    debugPrint('meal.id="${meal.id}" meal.title="${meal.title}"');
+    debugPrint('favorites state has ${state.length} meals');
+    debugPrint('current favorite IDs: [${state.map((m) => m.id).join(", ")}]');
+    debugPrint('mealIsFavorite BEFORE toggle: $mealIsFavorite');
+    debugPrint(
+        'expected behavior: mealIsFavorite=$mealIsFavorite -> should ${mealIsFavorite ? "REMOVE" : "ADD"}');
     // 1. Update UI state locally for speed
     if (mealIsFavorite) {
       state = state.where((m) => m.id != meal.id).toList();
@@ -64,29 +71,49 @@ class FavoriteMealsNotifier extends Notifier<List<Meal>> {
       state = [...state, meal];
     }
 
+    debugPrint('state AFTER local update has ${state.length} meals');
+    debugPrint(
+        'post-toggle state contains meal? ${state.any((m) => m.id == meal.id)}');
+    debugPrint(
+        'post-toggle favorite IDs: [${state.map((m) => m.id).join(", ")}]');
+
     // 2. Sync with Supabase
     try {
       final user = _supabase.auth.currentUser;
-      if (user == null) return !mealIsFavorite;
+      if (user == null) {
+        debugPrint('NO USER -> returning !mealIsFavorite=${!mealIsFavorite}');
+        return !mealIsFavorite;
+      }
 
-      await _supabase.from('profiles').upsert({
+      final newFavoriteIds = state.map((m) => m.id).toList();
+      debugPrint('ABOUT TO UPSERT: id=${user.id} favorites=$newFavoriteIds');
+      final response = await _supabase.from('profiles').upsert({
         'id': user.id,
-        'favorites': state.map((m) => m.id).toList(),
-      });
+        'favorites': newFavoriteIds,
+      }).select();
 
+      debugPrint('UPSERT RESPONSE: $response');
       debugPrint(
-          '[FavoritesNotifier] synced ${state.length} favorites to Supabase');
+          'Sync SUCCESS -> returning !mealIsFavorite=${!mealIsFavorite}');
     } catch (error) {
-      debugPrint('[FavoritesNotifier] Failed to sync favorites: $error');
+      debugPrint('SYNC FAILED: $error');
+      debugPrint(
+          'mealIsFavorite was $mealIsFavorite -> revert will ${mealIsFavorite ? "RE-ADD" : "RE-REMOVE"}');
+
       // Revert local state on sync failure to keep UI consistent
       if (mealIsFavorite) {
         state = [...state, meal];
       } else {
         state = state.where((m) => m.id != meal.id).toList();
       }
+
+      debugPrint('state AFTER revert has ${state.length} meals');
+      debugPrint(
+          'Returning: $mealIsFavorite (this will make wasAdded=$mealIsFavorite)');
       return mealIsFavorite;
     }
 
+    debugPrint('=== FAVORITES TOGGLE END (returning ${!mealIsFavorite}) ===');
     return !mealIsFavorite;
   }
 }
