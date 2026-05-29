@@ -1,14 +1,13 @@
-import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:http/http.dart' as http;
-import 'package:meals/config/api_config.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:meals/screens/admin_dashboard.dart';
 import 'package:meals/screens/tabs.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:meals/providers/meals_provider.dart'; // Make sure this path is correct
+import 'package:meals/screens/forgot_password_screen.dart';
+import 'package:meals/providers/meals_provider.dart';
+import 'package:meals/services/supabase_auth_service.dart';
 
 class AuthScreen extends ConsumerStatefulWidget {
   const AuthScreen({super.key});
@@ -20,11 +19,64 @@ class AuthScreen extends ConsumerStatefulWidget {
 class _AuthScreenState extends ConsumerState<AuthScreen> {
   bool _isLogin = true;
   bool _isPasswordVisible = false;
-
+  final _supabaseAuth = SupabaseAuthService();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   final _nameController = TextEditingController();
+
+  //Handles a successful email password authentication.
+  //Ensures profile exists, fetches role, and navigates to the correct screen.
+  Future<void> _onAuthenticated() async {
+    debugPrint('[AuthScreen] _onAuthenticated: user authenticated');
+
+    ref.invalidate(mealsProvider);
+    ref.invalidate(allMealsProvider);
+
+    // Fetch role from Supabase Profiles table
+    final supabase = Supabase.instance.client;
+    final user = supabase.auth.currentUser;
+    debugPrint('[AuthScreen] authenticated user id: ${user?.id}');
+
+    bool isAdmin = false;
+    if (user != null) {
+      final profile = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', user.id)
+          .maybeSingle();
+
+      debugPrint('[AuthScreen] fetched profile: $profile');
+      final role = profile?['role'] as String?;
+      debugPrint('[AuthScreen] fetched role: $role');
+
+      isAdmin = role == 'admin';
+      debugPrint('[AuthScreen] admin detection result: $isAdmin');
+    }
+
+    if (!mounted) return;
+
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (ctx) =>
+            isAdmin ? const AdminDashboardScreen() : const TabScreen(),
+      ),
+    );
+  }
+
+  // Handles the Google OAuth sign-in/sign-up button press.
+  // still have some issues here
+  Future<void> _handleGoogleSignIn() async {
+    debugPrint('[AuthScreen] _handleGoogleSignIn: starting');
+    try {
+      await _supabaseAuth.signInWithGoogle();
+      // The browser/CCT is now open for Google authentication.
+      debugPrint('[AuthScreen] _handleGoogleSignIn: browser opened for OAuth');
+    } catch (e) {
+      debugPrint('[AuthScreen] _handleGoogleSignIn failed: $e');
+      _showError(e.toString());
+    }
+  }
 
   // our SUBMIT LOGIC
 
@@ -45,146 +97,54 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       return;
     }
 
-    final url = Uri.parse(_isLogin
-        ? '${ApiConfig.baseUrl}/login'
-        : '${ApiConfig.baseUrl}/signup');
-
     try {
-      final response = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'email': email,
-          'password': password,
-          if (!_isLogin) 'name': _nameController.text.trim(),
-        }),
-      );
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        final responseData = json.decode(response.body);
-        final prefs = await SharedPreferences.getInstance();
-        final String? extractedId = responseData['userId']?.toString();
-
-        if (extractedId != null && extractedId.isNotEmpty) {
-          await prefs.setString('userId', extractedId);
-          await prefs.setBool('isLoggedIn', true);
-          await prefs.setBool('isAdmin', responseData['isAdmin'] == true);
-          await prefs.setString(
-            'role',
-            responseData['role']?.toString() ?? 'user',
-          );
-
-          final doubleCheck = prefs.getString('userId');
-          print('VERIFICATION: SharedPreferences now contains: $doubleCheck');
-
-          ref.invalidate(mealsProvider);
-          ref.invalidate(allMealsProvider);
-
-          try {
-            await ref.read(allMealsProvider.future);
-            await ref.read(mealsProvider.future);
-            print('VERIFICATION: Provider fetch completed successfully.');
-          } catch (e) {
-            print('VERIFICATION: Provider fetch failed: $e');
-          }
-        }
-
-        if (!mounted) return;
-        final isAdmin = responseData['isAdmin'] == true;
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (ctx) =>
-                isAdmin ? const AdminDashboardScreen() : const TabScreen(),
-          ),
+      if (_isLogin) {
+        await _supabaseAuth.signIn(
+          email: email,
+          password: password,
         );
       } else {
-        final errorData = json.decode(response.body);
-        _showError(errorData['error'] ?? 'Authentication failed');
+        final response = await _supabaseAuth.signUp(
+          email: email,
+          password: password,
+        );
+
+        if (response.user != null) {
+          if (!mounted) return;
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Verification email sent. Please confirm your email before logging in.',
+              ),
+            ),
+          );
+
+          setState(() {
+            _isLogin = true;
+            _confirmPasswordController.clear();
+            _passwordController.clear();
+          });
+          return;
+        }
       }
+
+      ref.invalidate(mealsProvider);
+      ref.invalidate(allMealsProvider);
+
+      // Navigate based on role
+      await _onAuthenticated();
     } catch (e) {
-      _showError('Server connection failed');
+      _showError(e.toString());
     }
   }
 
   // our FORGOT PASSWORD LOGIC
-  void _showForgotPasswordDialog() {
-    final _emailResetController = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1A1A1A),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(
-          "Reset Password",
-          style: GoogleFonts.philosopher(
-              color: Colors.white, fontWeight: FontWeight.bold),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              "Enter your email address and we'll send you a link to reset your password.",
-              style: TextStyle(color: Colors.white60, fontSize: 14),
-            ),
-            const SizedBox(height: 20),
-            _buildGlassField(
-                _emailResetController, 'Email Address', Icons.email_outlined),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child:
-                const Text("Cancel", style: TextStyle(color: Colors.white38)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF562100),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
-            ),
-            onPressed: () {
-              _sendPasswordResetEmail(_emailResetController.text.trim());
-              Navigator.of(ctx).pop();
-            },
-            child:
-                const Text("Send Link", style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
+  void _navigateToForgotPassword() {
+    debugPrint('[AuthScreen] navigating to ForgotPasswordScreen');
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const ForgotPasswordScreen()),
     );
-  }
-
-  Future<void> _sendPasswordResetEmail(String email) async {
-    if (email.isEmpty) {
-      _showError("Please enter your email.");
-      return;
-    }
-
-    final url = Uri.parse('${ApiConfig.baseUrl}/forgot-password');
-
-    try {
-      final response = await http.post(
-        url,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: json.encode({
-          'email': email,
-        }),
-      );
-
-      if (response.statusCode == 200) {
-        _showError("Reset link sent! Check your inbox.");
-      } else {
-        final errorData = json.decode(response.body);
-        _showError(errorData['error'] ?? "Error occurred.");
-      }
-    } catch (error) {
-      _showError("Server connection failed.");
-    }
   }
 
   void _showError(String message) {
@@ -308,7 +268,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                             Align(
                               alignment: Alignment.centerRight,
                               child: TextButton(
-                                onPressed: _showForgotPasswordDialog,
+                                onPressed: _navigateToForgotPassword,
                                 child: const Text(
                                   'Forgot password?',
                                   style: TextStyle(
@@ -320,6 +280,12 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
                           const SizedBox(height: 24),
                           _buildGradientButton(),
+                          const SizedBox(height: 16),
+                          OutlinedButton.icon(
+                            onPressed: _handleGoogleSignIn,
+                            icon: const Icon(Icons.login),
+                            label: const Text('Continue with Google'),
+                          ),
                           const SizedBox(height: 20),
                           GestureDetector(
                             onTap: () {
