@@ -20,6 +20,11 @@ class MealDetailScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final favoriteMeals = ref.watch(favoriteMealsProvider);
     final bool isFavorite = favoriteMeals.any((m) => m.id == meal.id);
+    debugPrint(
+        '[MealDetailScreen] build: meal.id=${meal.id} meal.title="${meal.title}" isPublic=${!meal.isPersonal}');
+    debugPrint(
+        '[MealDetailScreen] favoriteMeals count=${favoriteMeals.length}');
+    debugPrint('[MealDetailScreen] isFavorite=$isFavorite');
 
     return Scaffold(
       appBar: AppBar(
@@ -106,9 +111,20 @@ class MealDetailScreen extends ConsumerWidget {
             IconButton(
               color: Colors.white,
               onPressed: () async {
+                debugPrint('\n=== FAVORITE BUTTON PRESSED ===');
+                debugPrint(
+                    'meal.id="${meal.id}" meal.title="${meal.title}" isPublic=${!meal.isPersonal}');
+                debugPrint(
+                    'isFavorite (captured at build) BEFORE toggle=$isFavorite');
+
                 final wasAdded = await ref
                     .read(favoriteMealsProvider.notifier)
                     .toggleMealFavoriteStatus(meal);
+
+                debugPrint(
+                    'toggleMealFavoriteStatus returned: wasAdded=$wasAdded');
+                debugPrint(
+                    'This means the snackbar will show: "${wasAdded ? "Meal added as favorite" : "Meal removed"}"');
 
                 if (!context.mounted) return;
 
@@ -120,6 +136,7 @@ class MealDetailScreen extends ConsumerWidget {
                     ),
                   ),
                 );
+                debugPrint('=== FAVORITE BUTTON DONE ===\n');
               },
               icon: AnimatedSwitcher(
                 duration: const Duration(milliseconds: 300),
