@@ -1,19 +1,18 @@
-import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
-
+import '../repositories/supabase_categories_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-import '../config/api_config.dart';
 import '../models/category.dart';
 import '../models/meal.dart';
 import '../providers/categories_provider.dart';
 import '../providers/meals_provider.dart';
 import '../screens/auth.dart';
 import '../widgets/meal_image_provider.dart';
+import '../services/supabase_storage_service.dart';
+import '../repositories/supabase_meals_repository.dart';
 
 class AdminDashboardScreen extends ConsumerStatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -23,7 +22,8 @@ class AdminDashboardScreen extends ConsumerStatefulWidget {
       _AdminDashboardScreenState();
 }
 
-class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
+class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen>
+    with SingleTickerProviderStateMixin {
   static const _panelColor = Color(0xFF1F1408);
   static const _fieldFillColor = Color(0xFF2A1A10);
   static const _labelColor = Color(0xFFFFB74D);
@@ -37,6 +37,10 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
   final _categoryTitleController = TextEditingController();
   final _gradientStartController = TextEditingController(text: '#ff9800');
   final _gradientEndController = TextEditingController(text: '#f57c00');
+  final _supabaseStorageService = SupabaseStorageService();
+  final _supabaseMealsRepository = SupabaseMealsRepository();
+  final _supabaseCategoriesRepository = SupabaseCategoriesRepository();
+  late TabController _tabController;
 
   List<Meal> _publicMeals = [];
   bool _isLoadingMeals = true;
@@ -46,6 +50,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
   String? _editingCategoryId;
   String? _selectedCategoryId;
   Uint8List? _pickedImage;
+  File? _pickedImageFile;
   String? _existingImageUrl;
   String _complexity = 'simple';
   String _affordability = 'affordable';
@@ -57,40 +62,26 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 3, vsync: this);
     _loadAdminMeals();
-  }
-
-  Future<Map<String, String>> _adminHeaders() async {
-    final prefs = await SharedPreferences.getInstance();
-    final userId = prefs.getString('userId') ?? '';
-
-    return {
-      'Content-Type': 'application/json',
-      'user-id': userId,
-    };
   }
 
   Future<void> _loadAdminMeals() async {
     setState(() => _isLoadingMeals = true);
 
     try {
-      final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}/admin/meals'),
-        headers: await _adminHeaders(),
-      );
-
-      if (response.statusCode == 200) {
-        final List<dynamic> listData = json.decode(response.body);
-        setState(() {
-          _publicMeals = listData.map((item) => Meal.fromJson(item)).toList();
-        });
-      } else {
-        _showMessage('Could not load public meals');
-      }
-    } catch (_) {
-      _showMessage('Server connection failed');
+      final meals = await _supabaseMealsRepository.fetchPublicMeals();
+      setState(() {
+        _publicMeals = meals;
+      });
+      debugPrint(
+          '[AdminDashboard] refreshed meal count: ${_publicMeals.length}');
+    } catch (e) {
+      _showMessage('Load failed: $e');
     } finally {
-      if (mounted) setState(() => _isLoadingMeals = false);
+      if (mounted) {
+        setState(() => _isLoadingMeals = false);
+      }
     }
   }
 
@@ -115,6 +106,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
       final bytes = await pickedFile.readAsBytes();
       setState(() {
         _pickedImage = bytes;
+        _pickedImageFile = File(pickedFile.path);
         _existingImageUrl = null;
       });
     }
@@ -123,16 +115,9 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
   void _removeImage() {
     setState(() {
       _pickedImage = null;
+      _pickedImageFile = null;
       _existingImageUrl = null;
     });
-  }
-
-  String? _currentImageUrl() {
-    if (_pickedImage != null) {
-      return 'data:image/jpeg;base64,${base64Encode(_pickedImage!)}';
-    }
-
-    return _existingImageUrl;
   }
 
   int? _parseDurationMinutes(String value) {
@@ -174,81 +159,100 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
 
   Future<void> _saveMeal() async {
     final duration = _parseDurationMinutes(_durationController.text);
-    final imageUrl = _currentImageUrl();
-    final missingFields = _missingMealFields(duration, imageUrl);
+    setState(() => _isSavingMeal = true);
 
-    if (missingFields.isNotEmpty) {
-      _showMessage('Missing: ${missingFields.join(', ')}');
+    String? finalImageUrl = _existingImageUrl;
+
+    try {
+      // If we have a new picked image we need to upload it to Supabase Storage first
+      if (_pickedImage != null && _pickedImageFile != null) {
+        finalImageUrl =
+            await _supabaseStorageService.uploadMealImage(_pickedImageFile!);
+      }
+    } catch (e) {
+      _showMessage('Image upload failed: $e');
+      setState(() => _isSavingMeal = false);
       return;
     }
 
-    setState(() => _isSavingMeal = true);
+    final missingFields = _missingMealFields(duration, finalImageUrl);
 
-    final body = {
-      'title': _titleController.text.trim(),
-      'imageUrl': imageUrl,
-      'categories': [_selectedCategoryId],
-      'ingredients': _lines(_ingredientsController),
-      'steps': _lines(_stepsController),
-      'duration': duration,
-      'complexity': _complexity,
-      'affordability': _affordability,
-      'isGlutenFree': _isGlutenFree,
-      'isLactoseFree': _isLactoseFree,
-      'isVegan': _isVegan,
-      'isVegetarian': _isVegetarian,
-    };
+    if (missingFields.isNotEmpty) {
+      _showMessage(
+        'Missing: ${missingFields.join(', ')}',
+      );
+      setState(() => _isSavingMeal = false);
+      return;
+    }
 
     try {
       final editingId = _editingMealId;
-      final response = editingId == null
-          ? await http.post(
-              Uri.parse('${ApiConfig.baseUrl}/admin/meals'),
-              headers: await _adminHeaders(),
-              body: json.encode({
-                ...body,
-                'id': 'm${DateTime.now().millisecondsSinceEpoch}',
-              }),
-            )
-          : await http.put(
-              Uri.parse('${ApiConfig.baseUrl}/admin/meals/$editingId'),
-              headers: await _adminHeaders(),
-              body: json.encode(body),
-            );
 
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        _clearMealForm();
-        ref.invalidate(allMealsProvider);
-        await _loadAdminMeals();
-        _showMessage(
-            editingId == null ? 'Public meal created' : 'Meal updated');
+      final meal = Meal(
+        id: editingId ?? '',
+        // Supabase generates UUID for new meals so it could lod base on that ID
+        title: _titleController.text.trim(),
+        imageUrl: finalImageUrl!,
+        categories: [_selectedCategoryId!],
+        ingredients: _lines(_ingredientsController),
+        steps: _lines(_stepsController),
+        duration: duration!,
+        complexity: Complexity.values.firstWhere((e) => e.name == _complexity),
+        affordability:
+            Affordability.values.firstWhere((e) => e.name == _affordability),
+        isGlutenFree: _isGlutenFree,
+        isLactoseFree: _isLactoseFree,
+        isVegan: _isVegan,
+        isVegetarian: _isVegetarian,
+      );
+
+      debugPrint('[AdminDashboard] update payload: ${meal.title}');
+
+      if (editingId == null) {
+        await _supabaseMealsRepository.createPublicMeal(meal);
       } else {
-        final error = json.decode(response.body);
-        final details = error['details']?.toString();
-        _showMessage(
-          details == null || details.isEmpty
-              ? error['error'] ?? 'Could not save meal'
-              : '${error['error']}: $details',
-        );
+        await _supabaseMealsRepository.updateMeal(meal, 'public');
       }
-    } catch (_) {
-      _showMessage('Server connection failed');
+      debugPrint('[AdminDashboard] update success');
+
+      _clearMealForm();
+
+      ref.invalidate(allMealsProvider);
+
+      await _loadAdminMeals();
+
+      _showMessage(
+        editingId == null ? 'Public meal created' : 'Meal updated',
+      );
+    } catch (e) {
+      debugPrint('[AdminDashboard] update failed: $e');
+      _showMessage('Save failed: $e');
     } finally {
-      if (mounted) setState(() => _isSavingMeal = false);
+      if (mounted) {
+        setState(() => _isSavingMeal = false);
+      }
     }
   }
 
   void _editMeal(Meal meal) {
+    final categoryUuid =
+        meal.categories.isNotEmpty ? meal.categories.first : null;
+    debugPrint(
+        '[AdminDashboard] edit navigation - received meal data: ${meal.title}');
+    debugPrint(
+        '[AdminDashboard] edit - meal categories UUIDs: ${meal.categories}');
+    debugPrint(
+        '[AdminDashboard] edit - selectedCategoryId set to: $categoryUuid');
     setState(() {
       _editingMealId = meal.id;
       _titleController.text = meal.title;
       _existingImageUrl = meal.imageUrl;
       _pickedImage = null;
+      _pickedImageFile = null;
       _ingredientsController.text = meal.ingredients.join('\n');
       _stepsController.text = meal.steps.join('\n');
       _durationController.text = meal.duration.toString();
-      _selectedCategoryId =
-          meal.categories.isNotEmpty ? meal.categories.first : null;
+      _selectedCategoryId = categoryUuid;
       _complexity = meal.complexity.name;
       _affordability = meal.affordability.name;
       _isGlutenFree = meal.isGlutenFree;
@@ -256,6 +260,8 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
       _isVegan = meal.isVegan;
       _isVegetarian = meal.isVegetarian;
     });
+
+    _tabController.animateTo(1);
   }
 
   Future<void> _deleteMeal(Meal meal) async {
@@ -271,7 +277,10 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+            child: const Text(
+              'Delete',
+              style: TextStyle(color: Colors.red),
+            ),
           ),
         ],
       ),
@@ -279,21 +288,25 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
 
     if (confirm != true) return;
 
-    try {
-      final response = await http.delete(
-        Uri.parse('${ApiConfig.baseUrl}/admin/meals/${meal.id}'),
-        headers: await _adminHeaders(),
-      );
+    debugPrint('[AdminDashboard] delete start');
+    debugPrint('[AdminDashboard] deleted meal id: ${meal.id}');
 
-      if (response.statusCode == 200) {
-        ref.invalidate(allMealsProvider);
-        await _loadAdminMeals();
-        _showMessage('Public meal deleted');
-      } else {
-        _showMessage('Could not delete meal');
-      }
-    } catch (_) {
-      _showMessage('Server connection failed');
+    try {
+      await _supabaseMealsRepository.deleteMeal(meal.id, 'public');
+
+      setState(() {
+        _publicMeals.removeWhere((m) => m.id == meal.id);
+      });
+
+      debugPrint('[AdminDashboard] provider invalidation');
+      ref.invalidate(allMealsProvider);
+
+      await _loadAdminMeals();
+
+      _showMessage('Public meal deleted');
+    } catch (e) {
+      debugPrint('[AdminDashboard] delete failed: $e');
+      _showMessage('Delete failed: $e');
     }
   }
 
@@ -301,48 +314,52 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
     if (_categoryTitleController.text.trim().isEmpty ||
         _gradientStartController.text.trim().isEmpty ||
         _gradientEndController.text.trim().isEmpty) {
-      _showMessage('Fill in category title and gradient colors');
+      _showMessage(
+        'Fill in category title and gradient colors',
+      );
       return;
     }
 
     setState(() => _isSavingCategory = true);
 
-    final body = {
-      'title': _categoryTitleController.text.trim(),
-      'gradientStart': _gradientStartController.text.trim(),
-      'gradientEnd': _gradientEndController.text.trim(),
-    };
+    final title = _categoryTitleController.text.trim();
+    final gradientStart = _gradientStartController.text.trim();
+    final gradientEnd = _gradientEndController.text.trim();
+
+    debugPrint(
+        '[AdminDashboard._saveCategory] title=$title gradientStart=$gradientStart gradientEnd=$gradientEnd');
 
     try {
       final editingId = _editingCategoryId;
-      final response = editingId == null
-          ? await http.post(
-              Uri.parse('${ApiConfig.baseUrl}/admin/categories'),
-              headers: await _adminHeaders(),
-              body: json.encode({
-                ...body,
-                'id': 'c${DateTime.now().millisecondsSinceEpoch}',
-              }),
-            )
-          : await http.put(
-              Uri.parse('${ApiConfig.baseUrl}/admin/categories/$editingId'),
-              headers: await _adminHeaders(),
-              body: json.encode(body),
-            );
 
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        _clearCategoryForm();
-        ref.invalidate(categoriesProvider);
-        _showMessage(
-            editingId == null ? 'Category created' : 'Category updated');
+      if (editingId == null) {
+        await _supabaseCategoriesRepository.createCategory(
+          title: title,
+          gradientStart: gradientStart,
+          gradientEnd: gradientEnd,
+        );
       } else {
-        final error = json.decode(response.body);
-        _showMessage(error['error'] ?? 'Could not save category');
+        await _supabaseCategoriesRepository.updateCategory(
+          id: editingId,
+          title: title,
+          gradientStart: gradientStart,
+          gradientEnd: gradientEnd,
+        );
       }
-    } catch (_) {
-      _showMessage('Server connection failed');
+
+      _clearCategoryForm();
+
+      ref.invalidate(categoriesProvider);
+
+      _showMessage(
+        editingId == null ? 'Category created' : 'Category updated',
+      );
+    } catch (e) {
+      _showMessage('Save failed: $e');
     } finally {
-      if (mounted) setState(() => _isSavingCategory = false);
+      if (mounted) {
+        setState(() => _isSavingCategory = false);
+      }
     }
   }
 
@@ -357,20 +374,13 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
 
   Future<void> _deleteCategory(Category category) async {
     try {
-      final response = await http.delete(
-        Uri.parse('${ApiConfig.baseUrl}/admin/categories/${category.id}'),
-        headers: await _adminHeaders(),
-      );
+      await _supabaseCategoriesRepository.deleteCategory(category.id);
 
-      if (response.statusCode == 200) {
-        ref.invalidate(categoriesProvider);
-        _showMessage('Category deleted');
-      } else {
-        final error = json.decode(response.body);
-        _showMessage(error['error'] ?? 'Could not delete category');
-      }
-    } catch (_) {
-      _showMessage('Server connection failed');
+      ref.invalidate(categoriesProvider);
+
+      _showMessage('Category deleted');
+    } catch (e) {
+      _showMessage('Delete failed: $e');
     }
   }
 
@@ -379,6 +389,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
       _editingMealId = null;
       _titleController.clear();
       _pickedImage = null;
+      _pickedImageFile = null;
       _existingImageUrl = null;
       _ingredientsController.clear();
       _stepsController.clear();
@@ -430,6 +441,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
     _categoryTitleController.dispose();
     _gradientStartController.dispose();
     _gradientEndController.dispose();
+    _tabController.dispose();
     super.dispose();
   }
 
@@ -437,48 +449,52 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
   Widget build(BuildContext context) {
     final categoriesAsync = ref.watch(categoriesProvider);
 
-    return DefaultTabController(
-      length: 3,
-      child: Scaffold(
-        backgroundColor: _panelColor,
-        appBar: AppBar(
-          title: const Text('Admin Dashboard'),
-          actions: [
-            IconButton(
-              tooltip: 'Refresh',
-              onPressed: _loadAdminMeals,
-              icon: const Icon(Icons.refresh),
-            ),
-            IconButton(
-              tooltip: 'Logout',
-              onPressed: _logout,
-              icon: const Icon(Icons.logout),
-            ),
-          ],
-          bottom: const TabBar(
-            tabs: [
-              Tab(icon: Icon(Icons.restaurant_menu), text: 'Meals'),
-              Tab(icon: Icon(Icons.edit), text: 'Meal Form'),
-              Tab(icon: Icon(Icons.category), text: 'Categories'),
-            ],
+    return Scaffold(
+      backgroundColor: _panelColor,
+      appBar: AppBar(
+        title: const Text('Admin Dashboard'),
+        actions: [
+          IconButton(
+            tooltip: 'Refresh',
+            onPressed: _loadAdminMeals,
+            icon: const Icon(Icons.refresh),
           ),
-        ),
-        body: TabBarView(
-          children: [
-            _buildMealsList(),
-            categoriesAsync.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (error, stackTrace) => _buildMealForm(fallbackCategories),
-              data: _buildMealForm,
-            ),
-            categoriesAsync.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (error, stackTrace) =>
-                  _buildCategories(fallbackCategories),
-              data: _buildCategories,
-            ),
+          IconButton(
+            tooltip: 'Logout',
+            onPressed: _logout,
+            icon: const Icon(Icons.logout),
+          ),
+        ],
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: const [
+            Tab(icon: Icon(Icons.restaurant_menu), text: 'Meals'),
+            Tab(icon: Icon(Icons.edit), text: 'Meal Form'),
+            Tab(icon: Icon(Icons.category), text: 'Categories'),
           ],
         ),
+      ),
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          _buildMealsList(),
+          categoriesAsync.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (error, stackTrace) {
+              debugPrint('[AdminDashboard] categories error: $error');
+              return _buildMealForm([]);
+            },
+            data: _buildMealForm,
+          ),
+          categoriesAsync.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (error, stackTrace) {
+              debugPrint('[AdminDashboard] categories error: $error');
+              return _buildCategories([]);
+            },
+            data: _buildCategories,
+          ),
+        ],
       ),
     );
   }
@@ -532,8 +548,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
   }
 
   Widget _buildMealForm(List<Category> categories) {
-    final publicCategories =
-        categories.where((category) => category.id != 'c11').toList();
+    final publicCategories = categories;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
@@ -699,54 +714,53 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
           ),
         const SizedBox(height: 24),
         for (final category in categories)
-          if (category.id != 'c11')
-            Container(
-              margin: const EdgeInsets.only(bottom: 12),
+          Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              gradient: LinearGradient(
+                colors: [category.gradientStart, category.gradientEnd],
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+              ),
+            ),
+            child: Container(
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(12),
-                gradient: LinearGradient(
-                  colors: [category.gradientStart, category.gradientEnd],
-                  begin: Alignment.centerLeft,
-                  end: Alignment.centerRight,
-                ),
+                color: Colors.black.withOpacity(0.32),
+                border: Border.all(color: Colors.white.withOpacity(0.18)),
               ),
-              child: Container(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
-                  color: Colors.black.withOpacity(0.32),
-                  border: Border.all(color: Colors.white.withOpacity(0.18)),
+              child: ListTile(
+                title: Text(
+                  category.title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-                child: ListTile(
-                  title: Text(
-                    category.title,
-                    style: const TextStyle(
+                subtitle: Text(
+                  '${category.id}  ${category.gradientStartHex ?? ''} ${category.gradientEndHex ?? ''}',
+                  style: const TextStyle(color: Colors.white70),
+                ),
+                trailing: Wrap(
+                  children: [
+                    IconButton(
+                      tooltip: 'Edit',
                       color: Colors.white,
-                      fontWeight: FontWeight.bold,
+                      onPressed: () => _editCategory(category),
+                      icon: const Icon(Icons.edit),
                     ),
-                  ),
-                  subtitle: Text(
-                    '${category.id}  ${category.gradientStartHex ?? ''} ${category.gradientEndHex ?? ''}',
-                    style: const TextStyle(color: Colors.white70),
-                  ),
-                  trailing: Wrap(
-                    children: [
-                      IconButton(
-                        tooltip: 'Edit',
-                        color: Colors.white,
-                        onPressed: () => _editCategory(category),
-                        icon: const Icon(Icons.edit),
-                      ),
-                      IconButton(
-                        tooltip: 'Delete',
-                        color: Colors.redAccent,
-                        onPressed: () => _deleteCategory(category),
-                        icon: const Icon(Icons.delete),
-                      ),
-                    ],
-                  ),
+                    IconButton(
+                      tooltip: 'Delete',
+                      color: Colors.redAccent,
+                      onPressed: () => _deleteCategory(category),
+                      icon: const Icon(Icons.delete),
+                    ),
+                  ],
                 ),
               ),
             ),
+          ),
       ],
     );
   }
