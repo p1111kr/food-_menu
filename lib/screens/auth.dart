@@ -272,7 +272,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                                 child: const Text(
                                   'Forgot password?',
                                   style: TextStyle(
-                                      color: Color(0xFF562100),
+                                      color: Color.fromARGB(255, 139, 73, 31),
                                       fontWeight: FontWeight.bold),
                                 ),
                               ),
