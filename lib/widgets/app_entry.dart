@@ -30,6 +30,7 @@ class _AppEntryState extends State<AppEntry> with WidgetsBindingObserver {
 
   // Auth state subscription kept so we can cancel it on dispose
   StreamSubscription<AuthState>? _authSubscription;
+  StreamSubscription<Uri>? _appLinksSubscription;
 
   static const _primaryColor = Color.fromARGB(255, 131, 57, 0);
 
@@ -39,6 +40,7 @@ class _AppEntryState extends State<AppEntry> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _initialScreen = _computeInitialScreen();
     _setupAuthListener();
+    _setupAppLinksDebugListener();
     _logOAuthDebug("AppEntry initialized");
   }
 
@@ -46,6 +48,7 @@ class _AppEntryState extends State<AppEntry> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _authSubscription?.cancel();
+    _appLinksSubscription?.cancel();
     _logOAuthDebug("AppEntry disposed");
     super.dispose();
   }
@@ -101,7 +104,7 @@ class _AppEntryState extends State<AppEntry> with WidgetsBindingObserver {
     _authSubscription =
         Supabase.instance.client.auth.onAuthStateChange.listen((data) {
       _logOAuthDebug(
-          "Auth event: ${data.event} | session=${data.session != null ? "exists" : "null"} | email=${data.session?.user.email}");
+          "Auth event: ${data.event} | session=${data.session != null ? "exists" : "null"} | userId=${data.session?.user.id} | email=${data.session?.user.email}");
 
       if (data.event == AuthChangeEvent.passwordRecovery) {
         _logOAuthDebug("*** PASSWORD RECOVERY event detected ***");
@@ -159,6 +162,31 @@ class _AppEntryState extends State<AppEntry> with WidgetsBindingObserver {
     });
   }
 
+  void _setupAppLinksDebugListener() {
+    _appLinksSubscription = _appLinks.uriLinkStream.listen(
+      (uri) {
+        _logOAuthDebug("AppLinks stream URI received: $uri");
+        _logDeepLinkDetails(uri);
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        _logOAuthDebug("AppLinks stream error: $error");
+        debugPrintStack(
+          stackTrace: stackTrace,
+          label: "[AppEntry] AppLinks stream stack",
+        );
+      },
+    );
+
+    _appLinks.getInitialLink().then((uri) {
+      _logOAuthDebug("AppLinks initial URI: $uri");
+      if (uri != null) {
+        _logDeepLinkDetails(uri);
+      }
+    }).catchError((Object error) {
+      _logOAuthDebug("AppLinks initial URI error: $error");
+    });
+  }
+
   // FALLBACK Checks the latest URI from app_links to see if supabase_flutter's
   //deep link handler missed the OAuth callback.
 
@@ -166,6 +194,7 @@ class _AppEntryState extends State<AppEntry> with WidgetsBindingObserver {
     _appLinks.getLatestLink().then((Uri? latestUri) {
       if (latestUri != null) {
         _logOAuthDebug("FALLBACK: latest URI from app_links: $latestUri");
+        _logDeepLinkDetails(latestUri);
 
         if (latestUri.scheme == "io.supabase.flutter" &&
             latestUri.host == "login-callback" &&
@@ -246,6 +275,20 @@ class _AppEntryState extends State<AppEntry> with WidgetsBindingObserver {
 
   void _logOAuthDebug(String message) {
     debugPrint("[AppEntry] $message");
+  }
+
+  void _logDeepLinkDetails(Uri uri) {
+    _logOAuthDebug(
+        "Deep link details: scheme=${uri.scheme} host=${uri.host} path=${uri.path}");
+    _logOAuthDebug("Deep link query=${uri.queryParameters}");
+
+    final error = uri.queryParameters["error"];
+    final errorCode = uri.queryParameters["error_code"];
+    final errorDescription = uri.queryParameters["error_description"];
+    if (error != null || errorCode != null || errorDescription != null) {
+      _logOAuthDebug(
+          "OAuth callback error: error=$error error_code=$errorCode error_description=$errorDescription");
+    }
   }
 
   @override
