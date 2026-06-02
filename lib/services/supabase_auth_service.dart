@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 // Exception thrown when a password recovery email mismatch is detected.
 class RecoveryEmailMismatchException implements Exception {
@@ -75,25 +76,63 @@ class SupabaseAuthService {
   Future<void> signInWithGoogle() async {
     debugPrint('[SupabaseAuthService] signInWithGoogle starting');
     try {
+      const redirectTo = 'io.supabase.flutter://login-callback/';
+      final projectUrl = supabase.rest.url.replaceFirst('/rest/v1', '');
+
       OAuthFlowState.markStarted();
       debugPrint('[SupabaseAuthService] OAuthFlowState marked inProgress=true');
+      debugPrint('[SupabaseAuthService] Supabase project URL=$projectUrl');
+      debugPrint('[SupabaseAuthService] OAuth provider=google');
+      debugPrint('[SupabaseAuthService] redirectTo=$redirectTo');
 
-      final result = await supabase.auth.signInWithOAuth(
-        OAuthProvider.google,
-        redirectTo: 'io.supabase.flutter://login-callback/',
+      final oauthResponse = await supabase.auth.getOAuthSignInUrl(
+        provider: OAuthProvider.google,
+        redirectTo: redirectTo,
         queryParams: {
           'prompt': 'select_account',
         },
       );
 
+      final oauthUri = Uri.parse(oauthResponse.url);
+      _logLong(
+          '[SupabaseAuthService] GENERATED_OAUTH_URL', oauthUri.toString());
       debugPrint(
-          '[SupabaseAuthService] signInWithOAuth returned: launched=$result');
+          '[SupabaseAuthService] OAuth URL provider=${oauthUri.queryParameters['provider']}');
+      debugPrint(
+          '[SupabaseAuthService] OAuth URL redirect_to=${oauthUri.queryParameters['redirect_to']}');
+      debugPrint(
+          '[SupabaseAuthService] OAuth URL flow_type=${oauthUri.queryParameters['flow_type']}');
+      debugPrint(
+          '[SupabaseAuthService] OAuth URL code_challenge=${oauthUri.queryParameters['code_challenge']}');
+      debugPrint(
+          '[SupabaseAuthService] OAuth URL code_challenge_method=${oauthUri.queryParameters['code_challenge_method']}');
+
+      final result = await launchUrl(
+        oauthUri,
+        mode: LaunchMode.externalApplication,
+        webOnlyWindowName: '_self',
+      );
+
+      debugPrint(
+          '[SupabaseAuthService] OAuth launchUrl returned: launched=$result');
     } catch (e, stackTrace) {
       debugPrint('[SupabaseAuthService] signInWithGoogle failed: $e');
       debugPrint('[SupabaseAuthService] stackTrace: $stackTrace');
       OAuthFlowState.reset();
       rethrow;
     }
+  }
+
+  void _logLong(String label, String value) {
+    const chunkSize = 700;
+    debugPrint('$label START length=${value.length}');
+    for (var index = 0; index < value.length; index += chunkSize) {
+      final end =
+          (index + chunkSize < value.length) ? index + chunkSize : value.length;
+      debugPrint(
+          '$label chunk=${index ~/ chunkSize}: ${value.substring(index, end)}');
+    }
+    debugPrint('$label END');
   }
 
   Future<void> closeOAuthBrowser() async {
